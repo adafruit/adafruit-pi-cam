@@ -14,10 +14,8 @@
 
 
 # TO DO:
-# image storage/transfer modes
-# - Home dir: add 'Photos' directory or something
-# - Boot partition: mimic Canon folder layout
-# - Dropbox: transfer file
+# Dropbox upload
+# Image playback
 
 
 
@@ -39,7 +37,7 @@ from pygame.locals import *
 
 imgNum         =  0      # Image index for saving
 screenMode     =  0      # Current screen mode; default = viewfinder
-settingMode    =  2      # Last-used settings mode
+settingMode    =  3      # Last-used settings mode (default = storage)
 storeMode      =  0      # Storage mode; default = Photos folder
 storeModePrior = -1      # Prior storage mode (for detecting changes)
 sizeMode       =  0      # Image size; default = Large
@@ -178,29 +176,29 @@ def setFxMode(n):
 	global fxMode
 	fxMode = n
 	camera.image_effect = fxData[fxMode]
-	buttons[4][5].setBg('fx-' + fxData[fxMode])
+	buttons[5][5].setBg('fx-' + fxData[fxMode])
 
 def setIsoMode(n):
 	global isoMode
 	isoMode    = n
 	camera.ISO = isoData[isoMode][0]
-	buttons[5][5].setBg('iso-' + str(isoData[isoMode][0]))
-	buttons[5][7].rect = ((isoData[isoMode][1] - 10,) +
-	  buttons[5][7].rect[1:])
+	buttons[6][5].setBg('iso-' + str(isoData[isoMode][0]))
+	buttons[6][7].rect = ((isoData[isoMode][1] - 10,) +
+	  buttons[6][7].rect[1:])
 
 def setSizeMode(n):
 	global sizeMode
-	buttons[3][sizeMode + 3].setBg('radio3-0')
+	buttons[4][sizeMode + 3].setBg('radio3-0')
 	sizeMode = n
-	buttons[3][sizeMode + 3].setBg('radio3-1')
+	buttons[4][sizeMode + 3].setBg('radio3-1')
 	camera.resolution = sizeData[sizeMode][1]
 	camera.crop       = sizeData[sizeMode][2]
 
 def setStoreMode(n):
 	global storeMode
-	buttons[2][storeMode + 3].setBg('radio3-0')
+	buttons[3][storeMode + 3].setBg('radio3-0')
 	storeMode = n
-	buttons[2][storeMode + 3].setBg('radio3-1')
+	buttons[3][storeMode + 3].setBg('radio3-1')
 
 def saveSettings():
 	try:
@@ -241,28 +239,26 @@ def maxImg(path):
 	    if(i > max): max = i
 	return (min, max)
 
+def spinner():
+	global busy
 
-def capThread(filename):
-	global scaled
-	camera.resolution = sizeData[sizeMode][0]
-	try:
-	  camera.capture(filename, use_video_port=False, format='jpeg',
-	    thumbnail=None)
-	  # Set image file ownership to pi user, mode to 644
-	  os.chown(filename, uid, gid)
-	  os.chmod(filename,
-	    stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-	  img    = pygame.image.load(filename)
-	  scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
+	buttons[0][3].setBg('working')
+	buttons[0][3].draw(screen)
+	pygame.display.update()
 
-	finally:
-	  camera.resolution = sizeData[sizeMode][1]
+	n = 0
+	while busy is True:
+	  buttons[0][4].setBg('work-' + str(n))
+	  buttons[0][4].draw(screen)
+	  pygame.display.update()
+	  n = (n + 1) % 5
+	  time.sleep(0.15)
 
+	buttons[0][3].setBg(None)
+	buttons[0][4].setBg(None)
 
 def takePicture():
-
-	global imgNum, storeModePrior, scaled
-
+	global imgNum, storeModePrior, scaled, busy
 
 	if not os.path.isdir(pathData[storeMode]):
 	  try:
@@ -293,22 +289,25 @@ def takePicture():
 	  imgNum += 1
 	  if imgNum > 9999: imgNum = 0
 
-	buttons[0][3].setBg('working')
-	buttons[0][3].draw(screen)
-	pygame.display.update()
-
-	t = threading.Thread(target=capThread, args=(filename,))
+	t    = threading.Thread(target=spinner)
+	busy = True
 	t.start()
 
-	# Show spinner while capThread works
-	n = 0
-	while t.is_alive():
-	  buttons[0][4].setBg('work-' + str(n))
-	  buttons[0][4].draw(screen)
-	  pygame.display.update()
-	  n = (n + 1) % 5
-	  time.sleep(0.15)
+	camera.resolution = sizeData[sizeMode][0]
+	try:
+	  camera.capture(filename, use_video_port=False, format='jpeg',
+	    thumbnail=None)
+	  # Set image file ownership to pi user, mode to 644
+	  os.chown(filename, uid, gid)
+	  os.chmod(filename,
+	    stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+	  img    = pygame.image.load(filename)
+	  scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
+	finally:
+	  # Add error handling/indicator (disk full, etc.)
+	  camera.resolution = sizeData[sizeMode][1]
 
+	busy = False
 	t.join()
 
 	if scaled:
@@ -317,11 +316,9 @@ def takePicture():
 	  screen.blit(scaled, ((320 - sizeData[sizeMode][1][0]) / 2,
 	    (240 - sizeData[sizeMode][1][1]) / 2))
 	  pygame.display.update()
-	  time.sleep(3)
+	  time.sleep(2.5)
 	  scaled = None
 
-	buttons[0][3].setBg(None)
-	buttons[0][4].setBg(None)
 
 
 # UI callbacks -------------------------------------------------------------
@@ -333,8 +330,8 @@ def isoCallback(n): # Pass 1 (next ISO) or -1 (prev ISO)
 def settingCallback(n): # Pass 1 (next setting) or -1 (prev setting)
 	global screenMode
 	screenMode += n
-	if screenMode < 2:               screenMode = len(buttons) - 1
-	elif screenMode >= len(buttons): screenMode = 2
+	if screenMode < 3:               screenMode = len(buttons) - 1
+	elif screenMode >= len(buttons): screenMode = 3
 
 def fxCallback(n): # Pass 1 (next effect) or -1 (prev effect)
 	global fxMode
@@ -346,17 +343,33 @@ def quitCallback():
 
 def viewCallback(n):
 	global screenMode
-	if   n == 0: screenMode = settingMode # Switch to last settings mode
-	elif n == 1: screenMode = 1           # Switch to playback mode
+	if   n is 0: screenMode = settingMode # Switch to last settings mode
+	elif n is 1: screenMode = 1           # Switch to playback mode
 	else:        takePicture()
 
 def doneCallback():
 	global screenMode, settingMode
-	if screenMode > 1:
+	if screenMode > 2:
 	  settingMode = screenMode
 	  saveSettings()
 	screenMode = 0 # Switch back to viewfinder mode
 
+def imageCallback(n): # Pass 1 (next image), -1 (prev image) or 0 (delete)
+	global screenMode
+	if n is 0:
+	  screenMode = 2 # Delete confirmation
+	elif n is -1:
+	  pass
+	else:
+	  pass
+
+def deleteCallback(n):
+	global screenMode
+	if n is True:
+	  pass
+	else:
+	  pass
+	screenMode = 1 # Switch back to playback mode
 
 # Initialization -----------------------------------------------------------
 
@@ -414,12 +427,21 @@ buttons = [
    Button((148, 110,22, 22))], # Spinner goes here
 
   # Screen mode 1 is photo playback
-  [Button((  0,188,320,52), bg='done', cb=doneCallback),
-   Button((  0,  0, 80,52), bg='prev'),
-   Button((240,  0, 80,52), bg='next'),
-   Button((121,  0, 78,52), bg='trash')],
+  [Button((  0,188,320,52), bg='done' , cb=doneCallback),
+   Button((  0,  0, 80,52), bg='prev' , cb=imageCallback, value=-1),
+   Button((240,  0, 80,52), bg='next' , cb=imageCallback, value= 1),
+   Button((121,  0, 78,52), bg='trash', cb=imageCallback, value= 0)],
 
-  # Screen mode 2 is storage settings
+  # Screen mode 2 is delete confirmation
+  [Button((  0,35,320, 33), bg='delete'),
+   Button(( 32,86,120,100), bg='yn', fg='yes',
+    cb=deleteCallback, value=True),
+   Button((168,86,120,100), bg='yn', fg='no',
+    cb=deleteCallback, value=False)],
+
+  # Remaining screens are settings modes
+
+  # Screen mode 3 is storage settings
   [Button((  0,188,320, 52), bg='done', cb=doneCallback),
    Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
    Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
@@ -431,7 +453,7 @@ buttons = [
     cb=setStoreMode, value=2),
    Button((  0, 10,320, 35), bg='storage')],
 
-  # Screen mode 3 is size settings
+  # Screen mode 4 is size settings
   [Button((  0,188,320, 52), bg='done', cb=doneCallback),
    Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
    Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
@@ -443,7 +465,7 @@ buttons = [
     cb=setSizeMode, value=2),
    Button((  0, 10,320, 29), bg='size')],
 
-  # Screen mode 4 is graphic effect
+  # Screen mode 5 is graphic effect
   [Button((  0,188,320, 52), bg='done', cb=doneCallback),
    Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
    Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
@@ -452,7 +474,7 @@ buttons = [
    Button((  0, 67,320, 91), bg='fx-none'),
    Button((  0, 11,320, 29), bg='fx')],
 
-  # Screen mode 5 is ISO
+  # Screen mode 6 is ISO
   [Button((  0,188,320, 52), bg='done', cb=doneCallback),
    Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
    Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
@@ -463,12 +485,13 @@ buttons = [
    Button(( 17,157, 21, 19), bg='iso-arrow'),
    Button((  0, 10,320, 29), bg='iso')],
 
-  # Screen mode 6 is quit confirmation
+  # Screen mode 7 is quit confirmation
   [Button((  0,188,320, 52), bg='done'   , cb=doneCallback),
    Button((  0,  0, 80, 52), bg='prev'   , cb=settingCallback, value=-1),
    Button((240,  0, 80, 52), bg='next'   , cb=settingCallback, value= 1),
    Button((110, 60,100,120), bg='quit-ok', cb=quitCallback),
    Button((  0, 10,320, 35), bg='quit')],
+
 ]
 
 loadSettings() # Must come after buttons[] declaration
@@ -479,8 +502,23 @@ loadSettings() # Must come after buttons[] declaration
 try:
 	while(True):
 
+# If screenMode is 1 (playback) or 2 (confirm delete), operation is
+# entirely event driven,
+# there's no need to continually update screen.
+# But the handling of button presses is similar.
+# Clear background,
+# Keep track of image # being viewed (distinct from imgNum, the
+# last recorded -- but we can use that as the starting value).
+# Left and right buttons then seek back and forward through index.
+# If a complete loop is made or if directory is empty, display a
+# "no images" (or no photos) prompt.  Does not need an OK button,
+# just use the 'Done' button.
+# Also, monitor trash icon.  If clicked, delete that image,
+# advance backward? or forward?
+# Should it go in a totally separate event loop?
+
 	  for event in pygame.event.get():
-	    if(event.type == MOUSEBUTTONDOWN):
+	    if(event.type is MOUSEBUTTONDOWN):
 	      pos = pygame.mouse.get_pos()
 	      for b in buttons[screenMode]:
 	        if b.selected(pos): break

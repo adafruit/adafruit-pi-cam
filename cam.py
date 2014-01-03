@@ -438,7 +438,9 @@ buttons = [
     cb=deleteCallback, value=False)],
 
   # Screen mode 2 is 'No Images'
-  [Button((0,0,320,240), bg='empty', cb=doneCallback)],
+  [Button((0,  0,320,240), cb=doneCallback), # Full screen = button
+   Button((0,188,320, 52), bg='done'),       # Fake 'Done' button
+   Button((0, 53,320, 80), bg='empty')],     # 'Empty' message
 
   # Screen mode 3 is viewfinder / snapshot
   [Button((  0,188,156, 52), bg='gear', cb=viewCallback, value=0),

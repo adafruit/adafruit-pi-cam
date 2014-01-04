@@ -14,9 +14,7 @@
 
 
 # TO DO:
-# Dropbox upload
 # Image playback
-
 
 import atexit
 import cPickle as pickle
@@ -31,6 +29,7 @@ import threading
 import time
 import yuv2rgb
 from pygame.locals import *
+from subprocess import call  
 
 
 # Some global stuff --------------------------------------------------------
@@ -44,7 +43,15 @@ sizeMode       =  0      # Image size; default = Large
 fxMode         =  0      # Image effect; default = Normal
 isoMode        =  0      # ISO settingl default = Auto
 iconPath       = 'icons' # Subdirectory containing UI bitmaps (PNG format)
-scaled = None
+scaled         = None
+
+# To use Dropbox uploader, must have previously run the dropbox_uploader.sh
+# script to set up the app key and such.  If this was done as the normal pi
+# user, set upconfig to the .dropbox_uploader config file in that account's
+# home directory.  Alternately, could run it as root and remove the upconfig
+# reference later in the code.
+uploader       = '/home/pi/Dropbox-Uploader/dropbox_uploader.sh'
+upconfig       = '/home/pi/.dropbox_uploader'
 
 sizeData = [ # Camera parameters for different size settings
  # Full res      Viewfinder  Crop window
@@ -69,9 +76,9 @@ fxData = [
   'washedout', 'emboss', 'cartoon', 'solarize' ]
 
 pathData = [
-  '/home/pi/Photos',     # Path for storeMode = 0
-  '/boot/DCIM/CANON999', # Path for storeMode = 1
-  '/tmp']                # Path for storeMode = 2
+  '/home/pi/Photos',     # Path for storeMode = 0 (Photos folder)
+  '/boot/DCIM/CANON999', # Path for storeMode = 1 (Boot partition)
+  '/home/pi/Photos']     # Path for storeMode = 2 (Dropbox)
 
 # The final global -- the big Buttons list -- isn't declared until
 # after initialization as it requires the Icon list be initialized first.
@@ -193,7 +200,7 @@ def setSizeMode(n):
 	sizeMode = n
 	buttons[5][sizeMode + 3].setBg('radio3-1')
 	camera.resolution = sizeData[sizeMode][1]
-	camera.crop       = sizeData[sizeMode][2]
+#	camera.crop       = sizeData[sizeMode][2]
 
 def setStoreMode(n):
 	global storeMode
@@ -296,6 +303,7 @@ def takePicture():
 
 	scaled = None
 	camera.resolution = sizeData[sizeMode][0]
+	camera.crop       = sizeData[sizeMode][2]
 	try:
 	  camera.capture(filename, use_video_port=False, format='jpeg',
 	    thumbnail=None)
@@ -305,9 +313,15 @@ def takePicture():
 	    stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 	  img    = pygame.image.load(filename)
 	  scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
+	  if storeMode == 2: # Dropbox
+	    cmd = uploader + ' -f ' + upconfig + ' upload ' + filename
+	    print cmd
+	    call ([cmd], shell=True)  
+
 	finally:
 	  # Add error handling/indicator (disk full, etc.)
 	  camera.resolution = sizeData[sizeMode][1]
+	  camera.crop       = (0.0, 0.0, 1.0, 1.0)
 
 	busy = False
 	t.join()
@@ -404,7 +418,8 @@ screen = pygame.display.set_mode((0,0), pygame.FULLSCREEN)
 camera            = picamera.PiCamera()
 atexit.register(camera.close)
 camera.resolution = sizeData[sizeMode][1]
-camera.crop       = sizeData[sizeMode][2]
+#camera.crop       = sizeData[sizeMode][2]
+camera.crop       = (0.0, 0.0, 1.0, 1.0)
 # Leave raw format at default YUV, don't touch, don't set to RGB!
 
 # Load all icons at startup.  Must do this before Buttons are declared.

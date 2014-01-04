@@ -5,16 +5,23 @@
 # please support Adafruit and open-source development by purchasing 
 # products from Adafruit, thanks!
 #
-# http://www.adafruit.com/products/998
-# http://www.adafruit.com/products/1367
-# http://www.adafruit.com/products/1601
+# http://www.adafruit.com/products/998  (Raspberry Pi Model B)
+# http://www.adafruit.com/products/1367 (Raspberry Pi Camera Board)
+# http://www.adafruit.com/products/1601 (PiTFT Mini Kit)
+# This can also work with the Model A board and/or the Pi NoIR camera.
+#
+# Prerequisite tutorials: aside from the basic Raspbian setup and
+# enabling the camera in raspi-config, you should configure WiFi (if
+# using wireless with the Dropbox upload feature) and read these:
+# PiTFT setup (the tactile switch buttons are not required for this
+# project, but can be installed if you want them for other things):
+# http://learn.adafruit.com/adafruit-pitft-28-inch-resistive-touchscreen-display-raspberry-pi
+# Dropbox setup (if using the Dropbox upload feature):
+# http://raspi.tv/2013/how-to-use-dropbox-with-raspberry-pi
 #
 # Written by Phil Burgess / Paint Your Dragon for Adafruit Industries.
 # BSD license, all text above must be included in any redistribution.
 
-
-# TO DO:
-# Image playback
 
 import atexit
 import cPickle as pickle
@@ -32,67 +39,16 @@ from pygame.locals import *
 from subprocess import call  
 
 
-# Some global stuff --------------------------------------------------------
-
-imgNum          = -1      # Image index for saving (-1 = none set yet)
-screenMode      =  3      # Current screen mode; default = viewfinder
-screenModePrior =  3      # Current screen mode; default = viewfinder
-settingMode     =  4      # Last-used settings mode (default = storage)
-storeMode       =  0      # Storage mode; default = Photos folder
-storeModePrior  = -1      # Prior storage mode (for detecting changes)
-sizeMode        =  0      # Image size; default = Large
-fxMode          =  0      # Image effect; default = Normal
-isoMode         =  0      # ISO settingl default = Auto
-iconPath        = 'icons' # Subdirectory containing UI bitmaps (PNG format)
-scaled          = None
-
-# To use Dropbox uploader, must have previously run the dropbox_uploader.sh
-# script to set up the app key and such.  If this was done as the normal pi
-# user, set upconfig to the .dropbox_uploader config file in that account's
-# home directory.  Alternately, could run it as root and remove the upconfig
-# reference later in the code.
-uploader       = '/home/pi/Dropbox-Uploader/dropbox_uploader.sh'
-upconfig       = '/home/pi/.dropbox_uploader'
-
-sizeData = [ # Camera parameters for different size settings
- # Full res      Viewfinder  Crop window
- [(2592, 1944), (320, 240), (0.0   , 0.0   , 1.0   , 1.0   )], # Large
- [(1920, 1080), (320, 180), (0.1296, 0.2222, 0.7408, 0.5556)], # Med
- [(1440, 1080), (320, 240), (0.2222, 0.2222, 0.5556, 0.5556)]] # Small
-
-isoData = [ # Values for ISO settings (ISO value, indicator X position)
- [  0,  27], [100,  64], [200,  97], [320, 137],
- [400, 164], [500, 197], [640, 244], [800, 297]]
-
-# A fixed list of image effects is used (rather than polling
-# camera.IMAGE_EFFECTS) because the latter contains a few elements
-# that aren't valid (at least in video_port mode) -- e.g. blackboard,
-# whiteboard, posterize (but posterise, British spelling, is OK).
-# Others have no visible effect (or might require setting add'l
-# camera parameters for which there's no GUI yet) -- e.g. saturation,
-# colorbalance, colorpoint.
-fxData = [
-  'none', 'sketch', 'gpen', 'pastel', 'watercolor', 'oilpaint', 'hatch',
-  'negative', 'colorswap', 'posterise', 'denoise', 'blur', 'film',
-  'washedout', 'emboss', 'cartoon', 'solarize' ]
-
-pathData = [
-  '/home/pi/Photos',     # Path for storeMode = 0 (Photos folder)
-  '/boot/DCIM/CANON999', # Path for storeMode = 1 (Boot partition)
-  '/home/pi/Photos']     # Path for storeMode = 2 (Dropbox)
-
-# The final global -- the big Buttons list -- isn't declared until
-# after initialization as it requires the Icon list be initialized first.
-
-
 # UI classes ---------------------------------------------------------------
 
 # Small resistive touchscreen is best suited to simple tap interactions.
 # Importing a big widget library seemed a bit overkill.  Instead, a couple
-# of simplistic classes are sufficient for the UI elements:
+# of rudimentary classes are sufficient for the UI elements:
 
 # Icon is a very simple bitmap class, just associates a name and a pygame
 # image (PNG loaded from icons directory) for each.
+# There isn't a globally-declared fixed list of Icons.  Instead, the list
+# is populated at runtime from the contents of the 'icons' directory.
 
 class Icon:
 
@@ -116,33 +72,26 @@ class Icon:
 # used, for example, to center an Icon by creating a passive Button the
 # width of the full screen, but with other buttons left or right that
 # may take input precedence (e.g. the Effect labels & buttons).
+# After Icons are loaded at runtime, a pass is made through the global
+# buttons[] list to assign the Icon objects (from names) to each Button.
 
 class Button:
 
 	def __init__(self, rect, **kwargs):
 	  self.rect     = rect # Bounds
 	  self.color    = None # Background fill color, if any
-	  self.iconBg   = None # Background icon (atop color fill)
-	  self.iconFg   = None # Foreground icon (atop background)
+	  self.iconBg   = None # Background Icon (atop color fill)
+	  self.iconFg   = None # Foreground Icon (atop background)
+	  self.bg       = None # Background Icon name
+	  self.fg       = None # Foreground Icon name
 	  self.callback = None # Callback function
 	  self.value    = None # Value passed to callback
 	  for key, value in kwargs.iteritems():
-	    if key == 'color':
-	      self.color = value
-	    elif key == 'bg':
-	      for i in icons:
-	        if value == i.name:
-	          self.iconBg = i
-	          break
-	    elif key == 'fg':
-	      for i in icons:
-	        if value == i.name:
-	          self.iconFg = i
-	          break
-	    elif key == 'cb':
-	      self.callback = value
-	    elif key == 'value':
-	      self.value    = value
+	    if   key == 'color': self.color    = value
+	    elif key == 'bg'   : self.bg       = value
+	    elif key == 'fg'   : self.fg       = value
+	    elif key == 'cb'   : self.callback = value
+	    elif key == 'value': self.value    = value
 
 	def selected(self, pos):
 	  x1 = self.rect[0]
@@ -179,6 +128,228 @@ class Button:
 	        break
 
 
+# UI callbacks -------------------------------------------------------------
+
+def isoCallback(n): # Pass 1 (next ISO) or -1 (prev ISO)
+	global isoMode
+	setIsoMode((isoMode + n) % len(isoData))
+
+def settingCallback(n): # Pass 1 (next setting) or -1 (prev setting)
+	global screenMode
+	screenMode += n
+	if screenMode < 4:               screenMode = len(buttons) - 1
+	elif screenMode >= len(buttons): screenMode = 4
+
+def fxCallback(n): # Pass 1 (next effect) or -1 (prev effect)
+	global fxMode
+	setFxMode((fxMode + n) % len(fxData))
+
+def quitCallback():
+	saveSettings()
+	raise SystemExit
+
+def viewCallback(n):
+	global screenMode
+	if n is 0:   # Gear icon (settings)
+	  screenMode = settingMode # Switch to last settings mode
+	elif n is 1: # Play icon (image playback)
+	  if scaled: # Last image is already memory-resident
+	    loadIdx = saveIdx
+	    screenMode      =  0 # Image playback
+	    screenModePrior = -1 # Force screen refresh
+	  else:
+	    r = imgRange(pathData[storeMode])
+	    if r: showImage(r[1]) # Show last image in directory
+	    else: screenMode = 2  # No images
+	else: # Rest of screen -- shutter
+	  takePicture()
+
+def doneCallback():
+	global screenMode, settingMode
+	if screenMode > 3:
+	  settingMode = screenMode
+	  saveSettings()
+	screenMode = 3 # Switch back to viewfinder mode
+
+def imageCallback(n): # Pass 1 (next image), -1 (prev image) or 0 (delete)
+	global screenMode, loadIdx
+	if n is 0:
+	  screenMode = 1 # Delete confirmation
+	elif n is -1:
+	  showImage(loadIdx - 1)
+	  pass
+	else:
+	  showImage(loadIdx + 1)
+
+def deleteCallback(n):
+	global screenMode
+	if n is True:
+# delete file
+# if last file, go to mode 2
+	  screenMode      =  0
+	  screenModePrior = -1
+	else:
+	  screenMode      =  0
+	  screenModePrior = -1
+
+def storeModeCallback(n):
+	global storeMode
+	buttons[4][storeMode + 3].setBg('radio3-0')
+	storeMode = n
+	buttons[4][storeMode + 3].setBg('radio3-1')
+
+def sizeModeCallback(n):
+	global sizeMode
+	buttons[5][sizeMode + 3].setBg('radio3-0')
+	sizeMode = n
+	buttons[5][sizeMode + 3].setBg('radio3-1')
+	camera.resolution = sizeData[sizeMode][1]
+#	camera.crop       = sizeData[sizeMode][2]
+
+
+# Global stuff -------------------------------------------------------------
+
+screenMode      =  3      # Current screen mode; default = viewfinder
+screenModePrior = -1      # Prior screen mode (for detecting changes)
+settingMode     =  4      # Last-used settings mode (default = storage)
+storeMode       =  0      # Storage mode; default = Photos folder
+storeModePrior  = -1      # Prior storage mode (for detecting changes)
+sizeMode        =  0      # Image size; default = Large
+fxMode          =  0      # Image effect; default = Normal
+isoMode         =  0      # ISO settingl default = Auto
+iconPath        = 'icons' # Subdirectory containing UI bitmaps (PNG format)
+saveIdx         = -1      # Image index for saving (-1 = none set yet)
+loadIdx         = -1      # Image index for loading
+scaled          = None    # pygame Surface w/last-loaded image
+
+# To use Dropbox uploader, must have previously run the dropbox_uploader.sh
+# script to set up the app key and such.  If this was done as the normal pi
+# user, set upconfig to the .dropbox_uploader config file in that account's
+# home directory.  Alternately, could run the setup script as root and
+# delete the upconfig line below.
+uploader        = '/home/pi/Dropbox-Uploader/dropbox_uploader.sh'
+upconfig        = '/home/pi/.dropbox_uploader'
+
+sizeData = [ # Camera parameters for different size settings
+ # Full res      Viewfinder  Crop window
+ [(2592, 1944), (320, 240), (0.0   , 0.0   , 1.0   , 1.0   )], # Large
+ [(1920, 1080), (320, 180), (0.1296, 0.2222, 0.7408, 0.5556)], # Med
+ [(1440, 1080), (320, 240), (0.2222, 0.2222, 0.5556, 0.5556)]] # Small
+
+isoData = [ # Values for ISO settings [ISO value, indicator X position]
+ [  0,  27], [100,  64], [200,  97], [320, 137],
+ [400, 164], [500, 197], [640, 244], [800, 297]]
+
+# A fixed list of image effects is used (rather than polling
+# camera.IMAGE_EFFECTS) because the latter contains a few elements
+# that aren't valid (at least in video_port mode) -- e.g. blackboard,
+# whiteboard, posterize (but posterise, British spelling, is OK).
+# Others have no visible effect (or might require setting add'l
+# camera parameters for which there's no GUI yet) -- e.g. saturation,
+# colorbalance, colorpoint.
+fxData = [
+  'none', 'sketch', 'gpen', 'pastel', 'watercolor', 'oilpaint', 'hatch',
+  'negative', 'colorswap', 'posterise', 'denoise', 'blur', 'film',
+  'washedout', 'emboss', 'cartoon', 'solarize' ]
+
+pathData = [
+  '/home/pi/Photos',     # Path for storeMode = 0 (Photos folder)
+  '/boot/DCIM/CANON999', # Path for storeMode = 1 (Boot partition)
+  '/home/pi/Photos']     # Path for storeMode = 2 (Dropbox)
+
+icons = [] # This list gets populated at startup
+
+# buttons[] is a list of lists; each top-level list element corresponds
+# to one screen mode (e.g. viewfinder, image playback, storage settings),
+# and each element within those lists corresponds to one UI button.
+# There's a little bit of repetition (e.g. prev/next buttons are
+# declared for each settings screen, rather than a single reusable
+# set); trying to reuse those few elements just made for an ugly
+# tangle of code elsewhere.
+
+buttons = [
+  # Screen mode 0 is photo playback
+  [Button((  0,188,320, 52), bg='done' , cb=doneCallback),
+   Button((  0,  0, 80, 52), bg='prev' , cb=imageCallback, value=-1),
+   Button((240,  0, 80, 52), bg='next' , cb=imageCallback, value= 1),
+   Button(( 88, 51,157,102)), # 'Working' label (when enabled)
+   Button((148,110, 22, 22)), # Spinner (when enabled)
+   Button((121,  0, 78, 52), bg='trash', cb=imageCallback, value= 0)],
+
+  # Screen mode 1 is delete confirmation
+  [Button((  0,35,320, 33), bg='delete'),
+   Button(( 32,86,120,100), bg='yn', fg='yes',
+    cb=deleteCallback, value=True),
+   Button((168,86,120,100), bg='yn', fg='no',
+    cb=deleteCallback, value=False)],
+
+  # Screen mode 2 is 'No Images'
+  [Button((0,  0,320,240), cb=doneCallback), # Full screen = button
+   Button((0,188,320, 52), bg='done'),       # Fake 'Done' button
+   Button((0, 53,320, 80), bg='empty')],     # 'Empty' message
+
+  # Screen mode 3 is viewfinder / snapshot
+  [Button((  0,188,156, 52), bg='gear', cb=viewCallback, value=0),
+   Button((164,188,156, 52), bg='play', cb=viewCallback, value=1),
+   Button((  0,  0,320,240)           , cb=viewCallback, value=2),
+   Button(( 88, 51,157,102)),  # 'Working' label (when enabled)
+   Button((148, 110,22, 22))], # Spinner (when enabled)
+
+  # Remaining screens are settings modes
+
+  # Screen mode 4 is storage settings
+  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
+   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
+   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
+   Button((  2, 60,100,120), bg='radio3-1', fg='store-folder',
+    cb=storeModeCallback, value=0),
+   Button((110, 60,100,120), bg='radio3-0', fg='store-boot',
+    cb=storeModeCallback, value=1),
+   Button((218, 60,100,120), bg='radio3-0', fg='store-dropbox',
+    cb=storeModeCallback, value=2),
+   Button((  0, 10,320, 35), bg='storage')],
+
+  # Screen mode 5 is size settings
+  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
+   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
+   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
+   Button((  2, 60,100,120), bg='radio3-1', fg='size-l',
+    cb=sizeModeCallback, value=0),
+   Button((110, 60,100,120), bg='radio3-0', fg='size-m',
+    cb=sizeModeCallback, value=1),
+   Button((218, 60,100,120), bg='radio3-0', fg='size-s',
+    cb=sizeModeCallback, value=2),
+   Button((  0, 10,320, 29), bg='size')],
+
+  # Screen mode 6 is graphic effect
+  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
+   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
+   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
+   Button((  0, 70, 80, 52), bg='prev', cb=fxCallback     , value=-1),
+   Button((240, 70, 80, 52), bg='next', cb=fxCallback     , value= 1),
+   Button((  0, 67,320, 91), bg='fx-none'),
+   Button((  0, 11,320, 29), bg='fx')],
+
+  # Screen mode 7 is ISO
+  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
+   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
+   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
+   Button((  0, 70, 80, 52), bg='prev', cb=isoCallback    , value=-1),
+   Button((240, 70, 80, 52), bg='next', cb=isoCallback    , value= 1),
+   Button((  0, 79,320, 33), bg='iso-0'),
+   Button((  9,134,302, 26), bg='iso-bar'),
+   Button(( 17,157, 21, 19), bg='iso-arrow'),
+   Button((  0, 10,320, 29), bg='iso')],
+
+  # Screen mode 8 is quit confirmation
+  [Button((  0,188,320, 52), bg='done'   , cb=doneCallback),
+   Button((  0,  0, 80, 52), bg='prev'   , cb=settingCallback, value=-1),
+   Button((240,  0, 80, 52), bg='next'   , cb=settingCallback, value= 1),
+   Button((110, 60,100,120), bg='quit-ok', cb=quitCallback),
+   Button((  0, 10,320, 35), bg='quit')]
+]
+
+
 # Assorted utility functions -----------------------------------------------
 
 def setFxMode(n):
@@ -194,20 +365,6 @@ def setIsoMode(n):
 	buttons[7][5].setBg('iso-' + str(isoData[isoMode][0]))
 	buttons[7][7].rect = ((isoData[isoMode][1] - 10,) +
 	  buttons[7][7].rect[1:])
-
-def setSizeMode(n):
-	global sizeMode
-	buttons[5][sizeMode + 3].setBg('radio3-0')
-	sizeMode = n
-	buttons[5][sizeMode + 3].setBg('radio3-1')
-	camera.resolution = sizeData[sizeMode][1]
-#	camera.crop       = sizeData[sizeMode][2]
-
-def setStoreMode(n):
-	global storeMode
-	buttons[4][storeMode + 3].setBg('radio3-0')
-	storeMode = n
-	buttons[4][storeMode + 3].setBg('radio3-1')
 
 def saveSettings():
 	try:
@@ -230,8 +387,8 @@ def loadSettings():
 	  infile.close()
 	  if 'fx'    in d: setFxMode(   d['fx'])
 	  if 'iso'   in d: setIsoMode(  d['iso'])
-	  if 'size'  in d: setSizeMode( d['size'])
-	  if 'store' in d: setStoreMode(d['store'])
+	  if 'size'  in d: sizeModeCallback( d['size'])
+	  if 'store' in d: storeModeCallback(d['store'])
 	except:
 	  pass
 
@@ -248,26 +405,30 @@ def imgRange(path):
 	    if(i > max): max = i
 	return None if min > max else (min, max)
 
+# Busy indicator.  To use, run in separate thread, set global 'busy'
+# to False when done.
 def spinner():
-	global busy
+	global busy, screenMode, screenModePrior
 
-	buttons[3][3].setBg('working')
-	buttons[3][3].draw(screen)
+	buttons[screenMode][3].setBg('working')
+	buttons[screenMode][3].draw(screen)
 	pygame.display.update()
 
-	n = 0
+	busy = True
+	n    = 0
 	while busy is True:
-	  buttons[3][4].setBg('work-' + str(n))
-	  buttons[3][4].draw(screen)
+	  buttons[screenMode][4].setBg('work-' + str(n))
+	  buttons[screenMode][4].draw(screen)
 	  pygame.display.update()
 	  n = (n + 1) % 5
 	  time.sleep(0.15)
 
-	buttons[3][3].setBg(None)
-	buttons[3][4].setBg(None)
+	buttons[screenMode][3].setBg(None)
+	buttons[screenMode][4].setBg(None)
+	screenModePrior = -1 # Force refresh
 
 def takePicture():
-	global imgNum, storeModePrior, scaled, busy
+	global saveIdx, storeModePrior, scaled, busy
 
 	if not os.path.isdir(pathData[storeMode]):
 	  try:
@@ -289,21 +450,20 @@ def takePicture():
 	if storeMode != storeModePrior:
 	  r = imgRange(pathData[storeMode])
 	  if r is None:
-	    imgNum = 1
+	    saveIdx = 1
 	  else:
-	    imgNum = r[1] + 1
-	    if imgNum > 9999: imgNum = 0
+	    saveIdx = r[1] + 1
+	    if saveIdx > 9999: saveIdx = 0
 	  storeModePrior = storeMode
 
 	# Scan for next available image slot
 	while True:
-	  filename = pathData[storeMode] + '/IMG_' + '%04d' % imgNum + '.JPG'
+	  filename = pathData[storeMode] + '/IMG_' + '%04d' % saveIdx + '.JPG'
 	  if not os.path.isfile(filename): break
-	  imgNum += 1
-	  if imgNum > 9999: imgNum = 0
+	  saveIdx += 1
+	  if saveIdx > 9999: saveIdx = 0
 
-	t    = threading.Thread(target=spinner)
-	busy = True
+	t = threading.Thread(target=spinner)
 	t.start()
 
 	scaled = None
@@ -319,8 +479,10 @@ def takePicture():
 	  img    = pygame.image.load(filename)
 	  scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
 	  if storeMode == 2: # Dropbox
-	    cmd = uploader + ' -f ' + upconfig + ' upload ' + filename
-	    print cmd
+	    if upconfig:
+	      cmd = uploader + ' -f ' + upconfig + ' upload ' + filename
+	    else:
+	      cmd = uploader + ' upload ' + filename
 	    call ([cmd], shell=True)  
 
 	finally:
@@ -353,16 +515,15 @@ def showNextImage(n, direction):
 	    break
 
 def showImage(n):
-	global showNum, busy
+	global loadIdx, busy
 
-	t    = threading.Thread(target=spinner)
-	busy = True
+	t = threading.Thread(target=spinner)
 	t.start()
 
 	img      = pygame.image.load(
 	            pathData[storeMode] + '/IMG_' + '%04d' % n + '.JPG')
 	scaled   = pygame.transform.scale(img, sizeData[sizeMode][1])
-	showNum  = n
+	loadIdx  = n
 
 	busy = False
 	t.join()
@@ -371,72 +532,7 @@ def showImage(n):
 	screenModePrior = -1 # Force screen refresh
 
 
-# UI callbacks -------------------------------------------------------------
-
-def isoCallback(n): # Pass 1 (next ISO) or -1 (prev ISO)
-	global isoMode
-	setIsoMode((isoMode + n) % len(isoData))
-
-def settingCallback(n): # Pass 1 (next setting) or -1 (prev setting)
-	global screenMode
-	screenMode += n
-	if screenMode < 4:               screenMode = len(buttons) - 1
-	elif screenMode >= len(buttons): screenMode = 4
-
-def fxCallback(n): # Pass 1 (next effect) or -1 (prev effect)
-	global fxMode
-	setFxMode((fxMode + n) % len(fxData))
-
-def quitCallback():
-	saveSettings()
-	raise SystemExit
-
-def viewCallback(n):
-	global screenMode
-	if n is 0:   # Gear icon (settings)
-	  screenMode = settingMode # Switch to last settings mode
-	elif n is 1: # Play icon (image playback)
-	  if scaled: # Last image is already memory-resident
-	    showNum = imgNum
-	    screenMode      =  0 # Image playback
-	    screenModePrior = -1 # Force screen refresh
-	  else:
-	    r = imgRange(pathData[storeMode])
-	    if r: showImage(r[1]) # Show last image in directory
-	    else: screenMode = 2  # No images
-	else: # Rest of screen -- shutter
-	  takePicture()
-
-def doneCallback():
-	global screenMode, settingMode
-	if screenMode > 3:
-	  settingMode = screenMode
-	  saveSettings()
-	screenMode = 3 # Switch back to viewfinder mode
-
-def imageCallback(n): # Pass 1 (next image), -1 (prev image) or 0 (delete)
-	global screenMode
-	if n is 0:
-	  screenMode = 1 # Delete confirmation
-	elif n is -1:
-	  showImage(showNum - 1)
-	  pass
-	else:
-	  showImage(showNum + 1)
-
-def deleteCallback(n):
-	global screenMode
-	if n is True:
-# delete file
-# if last file, go to mode 2
-	  screenMode      =  0
-	  screenModePrior = -1
-	else:
-	  screenMode      =  0
-	  screenModePrior = -1
-
 # Initialization -----------------------------------------------------------
-
 
 # Init framebuffer/touchscreen environment variables
 os.putenv('SDL_VIDEODRIVER', 'fbcon')
@@ -468,104 +564,23 @@ camera.resolution = sizeData[sizeMode][1]
 camera.crop       = (0.0, 0.0, 1.0, 1.0)
 # Leave raw format at default YUV, don't touch, don't set to RGB!
 
-# Load all icons at startup.  Must do this before Buttons are declared.
-icons = []
+# Load all icons at startup.
 for file in os.listdir(iconPath):
   if fnmatch.fnmatch(file, '*.png'):
     icons.append(Icon(file.split('.')[0]))
 
-# The buttons[] list sits down here (rather than with the other global
-# declarations above) as the icons[] list needs to be loaded up first.
-# It's a list of lists; each top-level list element corresponds to one
-# screen mode (e.g. viewfinder, image playback, storage settings), and
-# each element within those lists corresponds to one UI button.
-# There's a little bit of repetition (e.g. prev/next buttons are
-# declared for each settings screen, rather than a single reusable
-# set); trying to reuse those few elements just made for an ugly
-# tangle of code elsewhere.
+# Assign Icons to Buttons, now that they're loaded
+for s in buttons:        # For each screenful of buttons...
+  for b in s:            #  For each button on screen...
+    for i in icons:      #   For each icon...
+      if b.bg == i.name: #    Compare names; match?
+        b.iconBg = i     #     Assign Icon to Button
+        b.bg     = None  #     Name no longer used; allow garbage collection
+      if b.fg == i.name:
+        b.iconFg = i
+        b.fg     = None
 
-buttons = [
-  # Screen mode 0 is photo playback
-  [Button((  0,188,320,52), bg='done' , cb=doneCallback),
-   Button((  0,  0, 80,52), bg='prev' , cb=imageCallback, value=-1),
-   Button((240,  0, 80,52), bg='next' , cb=imageCallback, value= 1),
-   Button((121,  0, 78,52), bg='trash', cb=imageCallback, value= 0)],
-
-  # Screen mode 1 is delete confirmation
-  [Button((  0,35,320, 33), bg='delete'),
-   Button(( 32,86,120,100), bg='yn', fg='yes',
-    cb=deleteCallback, value=True),
-   Button((168,86,120,100), bg='yn', fg='no',
-    cb=deleteCallback, value=False)],
-
-  # Screen mode 2 is 'No Images'
-  [Button((0,  0,320,240), cb=doneCallback), # Full screen = button
-   Button((0,188,320, 52), bg='done'),       # Fake 'Done' button
-   Button((0, 53,320, 80), bg='empty')],     # 'Empty' message
-
-  # Screen mode 3 is viewfinder / snapshot
-  [Button((  0,188,156, 52), bg='gear', cb=viewCallback, value=0),
-   Button((164,188,156, 52), bg='play', cb=viewCallback, value=1),
-   Button((  0,  0,320,240)           , cb=viewCallback, value=2),
-   Button(( 88, 51,157,102)),  # 'Working' label (when enabled)
-   Button((148, 110,22, 22))], # Spinner (when enabled)
-
-  # Remaining screens are settings modes
-
-  # Screen mode 4 is storage settings
-  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
-   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
-   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
-   Button((  2, 60,100,120), bg='radio3-1', fg='store-folder',
-    cb=setStoreMode, value=0),
-   Button((110, 60,100,120), bg='radio3-0', fg='store-boot',
-    cb=setStoreMode, value=1),
-   Button((218, 60,100,120), bg='radio3-0', fg='store-dropbox',
-    cb=setStoreMode, value=2),
-   Button((  0, 10,320, 35), bg='storage')],
-
-  # Screen mode 5 is size settings
-  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
-   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
-   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
-   Button((  2, 60,100,120), bg='radio3-1', fg='size-l',
-    cb=setSizeMode, value=0),
-   Button((110, 60,100,120), bg='radio3-0', fg='size-m',
-    cb=setSizeMode, value=1),
-   Button((218, 60,100,120), bg='radio3-0', fg='size-s',
-    cb=setSizeMode, value=2),
-   Button((  0, 10,320, 29), bg='size')],
-
-  # Screen mode 6 is graphic effect
-  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
-   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
-   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
-   Button((  0, 70, 80, 52), bg='prev', cb=fxCallback     , value=-1),
-   Button((240, 70, 80, 52), bg='next', cb=fxCallback     , value= 1),
-   Button((  0, 67,320, 91), bg='fx-none'),
-   Button((  0, 11,320, 29), bg='fx')],
-
-  # Screen mode 7 is ISO
-  [Button((  0,188,320, 52), bg='done', cb=doneCallback),
-   Button((  0,  0, 80, 52), bg='prev', cb=settingCallback, value=-1),
-   Button((240,  0, 80, 52), bg='next', cb=settingCallback, value= 1),
-   Button((  0, 70, 80, 52), bg='prev', cb=isoCallback    , value=-1),
-   Button((240, 70, 80, 52), bg='next', cb=isoCallback    , value= 1),
-   Button((  0, 79,320, 33), bg='iso-0'),
-   Button((  9,134,302, 26), bg='iso-bar'),
-   Button(( 17,157, 21, 19), bg='iso-arrow'),
-   Button((  0, 10,320, 29), bg='iso')],
-
-  # Screen mode 8 is quit confirmation
-  [Button((  0,188,320, 52), bg='done'   , cb=doneCallback),
-   Button((  0,  0, 80, 52), bg='prev'   , cb=settingCallback, value=-1),
-   Button((240,  0, 80, 52), bg='next'   , cb=settingCallback, value= 1),
-   Button((110, 60,100,120), bg='quit-ok', cb=quitCallback),
-   Button((  0, 10,320, 35), bg='quit')],
-
-]
-
-loadSettings() # Must come after buttons[] declaration
+loadSettings() # Must come last; fiddles with Button/Icon states
 
 
 # Main loop ----------------------------------------------------------------

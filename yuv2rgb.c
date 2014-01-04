@@ -1,6 +1,13 @@
-// YUV->RGB conversion for Raspberry Pi camera, because
-// fast video port doesn't support raw RGB capture, only YUV.
-// python-dev required to build.
+/* YUV->RGB conversion for Raspberry Pi camera, because fast video
+   port doesn't currently support raw RGB capture, only YUV.
+   python-dev required to build.
+
+   Adafruit invests time and resources providing this open source code,
+   please support Adafruit and open-source development by purchasing
+   products from Adafruit, thanks!
+
+   Written by Phil Burgess / Paint Your Dragon for Adafruit Industries.
+   BSD license, all text above must be included in any redistribution. */
 
 #include <python2.7/Python.h>
 

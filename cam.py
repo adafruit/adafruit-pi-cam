@@ -34,16 +34,17 @@ from subprocess import call
 
 # Some global stuff --------------------------------------------------------
 
-imgNum         =  0      # Image index for saving
-screenMode     =  3      # Current screen mode; default = viewfinder
-settingMode    =  4      # Last-used settings mode (default = storage)
-storeMode      =  0      # Storage mode; default = Photos folder
-storeModePrior = -1      # Prior storage mode (for detecting changes)
-sizeMode       =  0      # Image size; default = Large
-fxMode         =  0      # Image effect; default = Normal
-isoMode        =  0      # ISO settingl default = Auto
-iconPath       = 'icons' # Subdirectory containing UI bitmaps (PNG format)
-scaled         = None
+imgNum          = -1      # Image index for saving (-1 = none set yet)
+screenMode      =  3      # Current screen mode; default = viewfinder
+screenModePrior =  3      # Current screen mode; default = viewfinder
+settingMode     =  4      # Last-used settings mode (default = storage)
+storeMode       =  0      # Storage mode; default = Photos folder
+storeModePrior  = -1      # Prior storage mode (for detecting changes)
+sizeMode        =  0      # Image size; default = Large
+fxMode          =  0      # Image effect; default = Normal
+isoMode         =  0      # ISO settingl default = Auto
+iconPath        = 'icons' # Subdirectory containing UI bitmaps (PNG format)
+scaled          = None
 
 # To use Dropbox uploader, must have previously run the dropbox_uploader.sh
 # script to set up the app key and such.  If this was done as the normal pi
@@ -236,8 +237,8 @@ def loadSettings():
 
 # Scan files in a directory, locating JPEGs with names matching the
 # software's convention (IMG_XXXX.JPG), returning a tuple with the
-# lowest and highest indices.
-def maxImg(path):
+# lowest and highest indices (or None if no matching files).
+def imgRange(path):
 	min = 9999
 	max = 0
 	for file in os.listdir(path):
@@ -245,7 +246,7 @@ def maxImg(path):
 	    i = int(file[4:8])
 	    if(i < min): min = i
 	    if(i > max): max = i
-	return (min, max)
+	return None if min > max else (min, max)
 
 def spinner():
 	global busy
@@ -286,8 +287,12 @@ def takePicture():
 	# If this is the first time accessing this directory,
 	# scan for the max image index, start at next pos.
 	if storeMode != storeModePrior:
-	  imgNum = maxImg(pathData[storeMode])[1] + 1
-	  if imgNum > 9999: imgNum = 0
+	  r = imgRange(pathData[storeMode])
+	  if r is None:
+	    imgNum = 1
+	  else:
+	    imgNum = r[1] + 1
+	    if imgNum > 9999: imgNum = 0
 	  storeModePrior = storeMode
 
 	# Scan for next available image slot
@@ -337,6 +342,33 @@ def takePicture():
 #	  scaled = None
 # Keep scaled resident for quick playback
 
+def showNextImage(n, direction):
+
+	while True:
+	  n += direction
+	  if(n > 9999): n = 0
+	  elif(n < 0):  n = 9999
+	  if os.path.exists(pathData[storeMode]+'/IMG_'+'%04d'%n+'.JPG'):
+	    showImage(n)
+	    break
+
+def showImage(n):
+	global showNum, busy
+
+	t    = threading.Thread(target=spinner)
+	busy = True
+	t.start()
+
+	img      = pygame.image.load(
+	            pathData[storeMode] + '/IMG_' + '%04d' % n + '.JPG')
+	scaled   = pygame.transform.scale(img, sizeData[sizeMode][1])
+	showNum  = n
+
+	busy = False
+	t.join()
+
+	screenMode      =  0 # Photo playback
+	screenModePrior = -1 # Force screen refresh
 
 
 # UI callbacks -------------------------------------------------------------
@@ -361,9 +393,19 @@ def quitCallback():
 
 def viewCallback(n):
 	global screenMode
-	if   n is 0: screenMode = settingMode # Switch to last settings mode
-	elif n is 1: blat(0)                  # Switch to playback mode
-	else:        takePicture()
+	if n is 0:   # Gear icon (settings)
+	  screenMode = settingMode # Switch to last settings mode
+	elif n is 1: # Play icon (image playback)
+	  if scaled: # Last image is already memory-resident
+	    showNum = imgNum
+	    screenMode      =  0 # Image playback
+	    screenModePrior = -1 # Force screen refresh
+	  else:
+	    r = imgRange(pathData[storeMode])
+	    if r: showImage(r[1]) # Show last image in directory
+	    else: screenMode = 2  # No images
+	else: # Rest of screen -- shutter
+	  takePicture()
 
 def doneCallback():
 	global screenMode, settingMode
@@ -375,19 +417,23 @@ def doneCallback():
 def imageCallback(n): # Pass 1 (next image), -1 (prev image) or 0 (delete)
 	global screenMode
 	if n is 0:
-	  blat(1) # Delete confirmation
+	  screenMode = 1 # Delete confirmation
 	elif n is -1:
+	  showImage(showNum - 1)
 	  pass
 	else:
-	  blat(2) # Empty (testing)
-	  pass
+	  showImage(showNum + 1)
 
 def deleteCallback(n):
 	global screenMode
 	if n is True:
-	  blat(0)
+# delete file
+# if last file, go to mode 2
+	  screenMode      =  0
+	  screenModePrior = -1
 	else:
-	  blat(0) # Return to playback mode
+	  screenMode      =  0
+	  screenModePrior = -1
 
 # Initialization -----------------------------------------------------------
 
@@ -522,78 +568,50 @@ buttons = [
 loadSettings() # Must come after buttons[] declaration
 
 
-
-# non-viewfinder mode
-# Callbacks may set it otherwise
-def blat(n):
-	global screenMode, scaled
-
-	screenMode = n
-
-	screen.fill(0)
-	if scaled:
-	  screen.blit(scaled,
-	    ((320 - scaled.get_width() ) / 2,
-	     (240 - scaled.get_height()) / 2))
-
-	for i,b in enumerate(buttons[screenMode]):
-	  b.draw(screen)
-	pygame.display.update()
-
-	# Invoke button callbacks until something changes screenMode
-	while screenMode == n:
-	  for event in pygame.event.get():
-	    if(event.type is MOUSEBUTTONDOWN):
-	      pos = pygame.mouse.get_pos()
-	      for b in buttons[screenMode]:
-	        if b.selected(pos): break
-
-
 # Main loop ----------------------------------------------------------------
 
 while(True):
 
-# If screenMode is 0 (playback) or 1 (confirm delete), operation is
-# entirely event driven,
-# there's no need to continually update screen.
-# But the handling of button presses is similar.
-# Clear background,
-# Keep track of image # being viewed (distinct from imgNum, the
-# last recorded -- but we can use that as the starting value).
-# Left and right buttons then seek back and forward through index.
-# If a complete loop is made or if directory is empty, display a
-# "no images" (or no photos) prompt.  Does not need an OK button,
-# just use the 'Done' button.
-# Also, monitor trash icon.  If clicked, delete that image,
-# advance backward? or forward?
-# Should it go in a totally separate event loop?
-# Always process button inputs
-# if mode != 1 or 2, do preview and redraw icons
-# if mode is 1 or 2, only redraw on input (in callbacks)
+  # Process touchscreen input
+  while True:
+    for event in pygame.event.get():
+      if(event.type is MOUSEBUTTONDOWN):
+        pos = pygame.mouse.get_pos()
+        for b in buttons[screenMode]:
+          if b.selected(pos): break
+    # If in viewfinder or settings modes, stop processing touchscreen
+    # and refresh the display to show the live preview.  In other modes
+    # (image playback, etc.), stop and refresh the screen only when
+    # screenMode changes.
+    if screenMode >= 3 or screenMode != screenModePrior: break
 
-  for event in pygame.event.get():
-    if(event.type is MOUSEBUTTONDOWN):
-      pos = pygame.mouse.get_pos()
-      for b in buttons[screenMode]:
-	if b.selected(pos): break
+  # Refresh display
+  if screenMode >= 3: # Viewfinder or settings modes
+    stream = io.BytesIO() # Capture into in-memory stream
+    camera.capture(stream, use_video_port=True, format='raw')
+    stream.seek(0)
+    stream.readinto(yuv)  # stream -> YUV buffer
+    stream.close()
+    yuv2rgb.convert(yuv, rgb, sizeData[sizeMode][1][0],
+      sizeData[sizeMode][1][1])
+    img = pygame.image.frombuffer(rgb[0:
+      (sizeData[sizeMode][1][0] * sizeData[sizeMode][1][1] * 3)],
+      sizeData[sizeMode][1], 'RGB')
+  elif screenMode < 2: # Playback mode or delete confirmation
+    img = scaled       # Show last-loaded image
+  else:                # 'No Photos' mode
+    img = None         # You get nothing, good day sir
 
-  stream = io.BytesIO()
-  camera.capture(stream, use_video_port=True, format='raw')
-  stream.seek(0)
-  stream.readinto(yuv)
-  stream.close()
-  yuv2rgb.convert(yuv, rgb, sizeData[sizeMode][1][0],
-    sizeData[sizeMode][1][1])
-  img = pygame.image.frombuffer(rgb[0:
-    (sizeData[sizeMode][1][0] * sizeData[sizeMode][1][1] * 3)],
-    sizeData[sizeMode][1], 'RGB')
-  if img.get_height() < 240: # Letterbox
+  if img is None or img.get_height() < 240: # Letterbox, clear background
     screen.fill(0)
-  screen.blit(img,
-    ((320 - img.get_width() ) / 2,
-     (240 - img.get_height()) / 2))
+  if img:
+    screen.blit(img,
+      ((320 - img.get_width() ) / 2,
+       (240 - img.get_height()) / 2))
 
+  # Overlay buttons on display and update
   for i,b in enumerate(buttons[screenMode]):
     b.draw(screen)
   pygame.display.update()
 
+  screenModePrior = screenMode

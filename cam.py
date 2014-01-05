@@ -22,7 +22,6 @@
 # Written by Phil Burgess / Paint Your Dragon for Adafruit Industries.
 # BSD license, all text above must be included in any redistribution.
 
-
 import atexit
 import cPickle as pickle
 import errno
@@ -129,6 +128,8 @@ class Button:
 
 
 # UI callbacks -------------------------------------------------------------
+# These are defined before globals because they're referenced by items in
+# the global buttons[] list.
 
 def isoCallback(n): # Pass 1 (next ISO) or -1 (prev ISO)
 	global isoMode
@@ -144,27 +145,28 @@ def fxCallback(n): # Pass 1 (next effect) or -1 (prev effect)
 	global fxMode
 	setFxMode((fxMode + n) % len(fxData))
 
-def quitCallback():
+def quitCallback(): # Quit confirmation button
 	saveSettings()
 	raise SystemExit
 
-def viewCallback(n):
-	global screenMode
+def viewCallback(n): # Viewfinder buttons
+	global loadIdx, scaled, screenMode, screenModePrior, settingMode, storeMode
+
 	if n is 0:   # Gear icon (settings)
 	  screenMode = settingMode # Switch to last settings mode
 	elif n is 1: # Play icon (image playback)
-	  if scaled: # Last image is already memory-resident
-	    loadIdx = saveIdx
+	  if scaled: # Last photo is already memory-resident
+	    loadIdx         = saveIdx
 	    screenMode      =  0 # Image playback
 	    screenModePrior = -1 # Force screen refresh
-	  else:
+	  else:      # Load image
 	    r = imgRange(pathData[storeMode])
 	    if r: showImage(r[1]) # Show last image in directory
 	    else: screenMode = 2  # No images
-	else: # Rest of screen -- shutter
+	else: # Rest of screen = shutter
 	  takePicture()
 
-def doneCallback():
+def doneCallback(): # Exit settings
 	global screenMode, settingMode
 	if screenMode > 3:
 	  settingMode = screenMode
@@ -172,33 +174,34 @@ def doneCallback():
 	screenMode = 3 # Switch back to viewfinder mode
 
 def imageCallback(n): # Pass 1 (next image), -1 (prev image) or 0 (delete)
-	global screenMode, loadIdx
+	global screenMode
 	if n is 0:
 	  screenMode = 1 # Delete confirmation
-	elif n is -1:
-	  showImage(loadIdx - 1)
-	  pass
 	else:
-	  showImage(loadIdx + 1)
+	  showNextImage(n)
 
-def deleteCallback(n):
-	global screenMode
+def deleteCallback(n): # Delete confirmation
+	global loadIdx, scaled, screenMode, storeMode
+	screenMode      =  0
+	screenModePrior = -1
 	if n is True:
-# delete file
-# if last file, go to mode 2
-	  screenMode      =  0
-	  screenModePrior = -1
-	else:
-	  screenMode      =  0
-	  screenModePrior = -1
+	  os.remove(pathData[storeMode] + '/IMG_' + '%04d' % loadIdx + '.JPG')
+	  if(imgRange(pathData[storeMode])):
+	    screen.fill(0)
+	    pygame.display.update()
+	    showNextImage(-1)
+	  else: # Last image deleteted; go to 'no images' mode
+	    screenMode = 2
+	    scaled     = None
+	    loadIdx    = -1
 
-def storeModeCallback(n):
+def storeModeCallback(n): # Radio buttons on storage settings screen
 	global storeMode
 	buttons[4][storeMode + 3].setBg('radio3-0')
 	storeMode = n
 	buttons[4][storeMode + 3].setBg('radio3-1')
 
-def sizeModeCallback(n):
+def sizeModeCallback(n): # Radio buttons on size settings screen
 	global sizeMode
 	buttons[5][sizeMode + 3].setBg('radio3-0')
 	sizeMode = n
@@ -272,8 +275,8 @@ buttons = [
   [Button((  0,188,320, 52), bg='done' , cb=doneCallback),
    Button((  0,  0, 80, 52), bg='prev' , cb=imageCallback, value=-1),
    Button((240,  0, 80, 52), bg='next' , cb=imageCallback, value= 1),
-   Button(( 88, 51,157,102)), # 'Working' label (when enabled)
-   Button((148,110, 22, 22)), # Spinner (when enabled)
+   Button(( 88, 70,157,102)), # 'Working' label (when enabled)
+   Button((148,129, 22, 22)), # Spinner (when enabled)
    Button((121,  0, 78, 52), bg='trash', cb=imageCallback, value= 0)],
 
   # Screen mode 1 is delete confirmation
@@ -428,7 +431,7 @@ def spinner():
 	screenModePrior = -1 # Force refresh
 
 def takePicture():
-	global saveIdx, storeModePrior, scaled, busy
+	global busy, loadIdx, saveIdx, scaled, sizeMode, storeMode, storeModePrior
 
 	if not os.path.isdir(pathData[storeMode]):
 	  try:
@@ -501,11 +504,15 @@ def takePicture():
 	     (240 - scaled.get_height()) / 2))
 	  pygame.display.update()
 	  time.sleep(2.5)
-#	  scaled = None
-# Keep scaled resident for quick playback
+	  loadIdx = saveIdx
 
-def showNextImage(n, direction):
+def showNextImage(direction):
+	global busy, loadIdx
 
+	t = threading.Thread(target=spinner)
+	t.start()
+
+	n = loadIdx
 	while True:
 	  n += direction
 	  if(n > 9999): n = 0
@@ -514,8 +521,11 @@ def showNextImage(n, direction):
 	    showImage(n)
 	    break
 
+	busy = False
+	t.join()
+
 def showImage(n):
-	global loadIdx, busy
+	global busy, loadIdx, scaled, screenMode, screenModePrior, sizeMode, storeMode
 
 	t = threading.Thread(target=spinner)
 	t.start()

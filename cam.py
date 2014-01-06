@@ -401,12 +401,14 @@ def loadSettings():
 def imgRange(path):
 	min = 9999
 	max = 0
-	for file in os.listdir(path):
-	  if fnmatch.fnmatch(file, 'IMG_[0-9][0-9][0-9][0-9].JPG'):
-	    i = int(file[4:8])
-	    if(i < min): min = i
-	    if(i > max): max = i
-	return None if min > max else (min, max)
+	try:
+	  for file in os.listdir(path):
+	    if fnmatch.fnmatch(file, 'IMG_[0-9][0-9][0-9][0-9].JPG'):
+	      i = int(file[4:8])
+	      if(i < min): min = i
+	      if(i > max): max = i
+	finally:
+	  return None if min > max else (min, max)
 
 # Busy indicator.  To use, run in separate thread, set global 'busy'
 # to False when done.
@@ -431,11 +433,10 @@ def spinner():
 	screenModePrior = -1 # Force refresh
 
 def takePicture():
-	global busy, loadIdx, saveIdx, scaled, sizeMode, storeMode, storeModePrior
+	global busy, gid, loadIdx, saveIdx, scaled, sizeMode, storeMode, storeModePrior, uid
 
 	if not os.path.isdir(pathData[storeMode]):
 	  try:
-	    # This theoretically is only necessary for the 'Photos' dir
 	    os.makedirs(pathData[storeMode])
 	    # Set new directory ownership to pi user, mode to 755
 	    os.chown(pathData[storeMode], uid, gid)
@@ -476,7 +477,7 @@ def takePicture():
 	  camera.capture(filename, use_video_port=False, format='jpeg',
 	    thumbnail=None)
 	  # Set image file ownership to pi user, mode to 644
-	  os.chown(filename, uid, gid)
+	  # os.chown(filename, uid, gid) # Not working, why?
 	  os.chmod(filename,
 	    stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 	  img    = pygame.image.load(filename)

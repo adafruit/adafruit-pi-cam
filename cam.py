@@ -484,10 +484,10 @@ def takePicture():
 	  scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
 	  if storeMode == 2: # Dropbox
 	    if upconfig:
-	      cmd = uploader + ' -f ' + upconfig + ' upload ' + filename
+	      cmd = uploader + ' -f ' + upconfig + ' upload ' + filename + ' Photos'
 	    else:
-	      cmd = uploader + ' upload ' + filename
-	    call ([cmd], shell=True)  
+	      cmd = uploader + ' upload ' + filename + ' Photos'
+	    call ([cmd], shell=True)
 
 	finally:
 	  # Add error handling/indicator (disk full, etc.)

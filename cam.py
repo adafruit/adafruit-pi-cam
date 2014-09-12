@@ -28,6 +28,7 @@ import errno
 import fnmatch
 import io
 import os
+import os.path
 import picamera
 import pygame
 import stat
@@ -484,9 +485,9 @@ def takePicture():
 	  scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
 	  if storeMode == 2: # Dropbox
 	    if upconfig:
-	      cmd = uploader + ' -f ' + upconfig + ' upload ' + filename + ' Photos'
+	      cmd = uploader + ' -f ' + upconfig + ' upload ' + filename + ' Photos/' + os.path.basename(filename)
 	    else:
-	      cmd = uploader + ' upload ' + filename + ' Photos'
+	      cmd = uploader + ' upload ' + filename + ' Photos/' + os.path.basename(filename)
 	    call ([cmd], shell=True)
 
 	finally:
